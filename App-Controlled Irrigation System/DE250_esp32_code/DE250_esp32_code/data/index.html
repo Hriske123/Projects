@@ -1,0 +1,350 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Motor Control</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      max-width: 500px;
+      margin: 0 auto;
+      padding: 20px;
+    }
+    .control-button {
+      background-color: #f44336;
+      color: white;
+      border: none;
+      padding: 40px;
+      width: 100%;
+      font-size: 24px;
+      margin: 20px 0;
+      border-radius: 10px;
+      cursor: pointer;
+      transition: background-color 0.3s;
+    }
+    .control-button.on {
+      background-color: #4CAF50;
+    }
+    .form-group {
+      margin-bottom: 15px;
+    }
+    label {
+      display: block;
+      margin-bottom: 5px;
+      font-weight: bold;
+    }
+    input {
+      width: 100%;
+      padding: 10px;
+      box-sizing: border-box;
+      border: 1px solid #ddd;
+      border-radius: 4px;
+    }
+    button {
+      background-color: #2196F3;
+      color: white;
+      border: none;
+      padding: 10px 15px;
+      border-radius: 4px;
+      cursor: pointer;
+    }
+    .schedule-list {
+      margin-top: 20px;
+      border-top: 1px solid #ddd;
+      padding-top: 10px;
+    }
+    .schedule-item {
+      background-color: #f5f5f5;
+      padding: 10px;
+      margin-bottom: 10px;
+      border-radius: 4px;
+      display: flex;
+      justify-content: space-between;
+    }
+    .delete-btn {
+      background-color: #ff5722;
+      color: white;
+      border: none;
+      padding: 5px 10px;
+      border-radius: 4px;
+      cursor: pointer;
+    }
+    .status {
+      padding: 10px;
+      margin: 10px 0;
+      border-radius: 4px;
+      background-color: #efefef;
+      text-align: center;
+    }
+  </style>
+</head>
+<body>
+  <h1>ESP32 Motor Control</h1>
+  
+  <div class="status" id="connectionStatus">Checking connection...</div>
+  
+  <button class="control-button" id="toggleButton">TURN ON</button>
+  
+  <div>
+    <h2>Schedule Motor Operation</h2>
+    <div class="form-group">
+      <label for="startTime">Start Time:</label>
+      <input type="time" id="startTime" required>
+    </div>
+    <div class="form-group">
+      <label for="duration">Duration (minutes):</label>
+      <input type="number" id="duration" min="1" max="1440" required>
+    </div>
+    <button id="scheduleButton">Set Schedule</button>
+  </div>
+  
+  <div class="schedule-list">
+    <h2>Current Schedule</h2>
+    <div id="scheduleItems"></div>
+  </div>
+  
+  <script>
+    // Global variables
+    let motorStatus = false;
+    let schedules = [];
+    let checkingInterval;
+    let deviceConnected = false;
+
+    // DOM elements
+    const toggleButton = document.getElementById('toggleButton');
+    const startTimeInput = document.getElementById('startTime');
+    const durationInput = document.getElementById('duration');
+    const scheduleButton = document.getElementById('scheduleButton');
+    const scheduleItemsDiv = document.getElementById('scheduleItems');
+    const connectionStatus = document.getElementById('connectionStatus');
+
+    // Initialize the page
+    document.addEventListener('DOMContentLoaded', function() {
+      // Check if there are saved schedules in localStorage
+      const savedSchedules = localStorage.getItem('motorSchedules');
+      if (savedSchedules) {
+        schedules = JSON.parse(savedSchedules);
+        updateScheduleDisplay();
+      }
+      
+      // Check current motor status
+      checkMotorStatus();
+      
+      // Start checking connection and running schedules
+      checkingInterval = setInterval(checkSchedulesAndConnection, 5000);
+    });
+
+    // After successful connection check, send current time to ESP32
+    async function syncTime() {
+    if (deviceConnected) {
+        const timestamp = Math.floor(Date.now() / 1000); // Unix timestamp in seconds
+        try {
+        await fetch('/set-time', {
+            method: 'POST',
+            headers: {
+            'Content-Type': 'application/x-www-form-urlencoded',
+            },
+            body: `timestamp=${timestamp}`
+        });
+        console.log('Time synchronized with ESP32');
+        } catch (error) {
+        console.error('Error syncing time:', error);
+        }
+     }
+    }
+
+
+    // Check if ESP32 is reachable
+    async function checkConnection() {
+  try {
+    const response = await fetch('/status', { timeout: 2000 });
+    if (response.ok) {
+      connectionStatus.textContent = 'Connected to ESP32';
+      connectionStatus.style.backgroundColor = '#c8e6c9';
+      deviceConnected = true;
+      
+      // Sync time after successful connection
+      await syncTime();
+      
+      return true;
+    } else {
+      throw new Error('Failed to connect');
+    }
+  } catch (error) {
+    connectionStatus.textContent = 'Disconnected from ESP32';
+    connectionStatus.style.backgroundColor = '#ffcdd2';
+    deviceConnected = false;
+    return false;
+  }
+}
+    // Update button appearance based on status
+    function updateButtonAppearance() {
+      if (motorStatus) {
+        toggleButton.textContent = 'TURN OFF';
+        toggleButton.classList.add('on');
+      } else {
+        toggleButton.textContent = 'TURN ON';
+        toggleButton.classList.remove('on');
+      }
+    }
+
+    // Check motor status from ESP32
+    async function checkMotorStatus() {
+      if (await checkConnection()) {
+        try {
+          const response = await fetch('/status');
+          const data = await response.json();
+          motorStatus = data.motorStatus;
+          updateButtonAppearance();
+        } catch (error) {
+          console.error('Error checking status:', error);
+        }
+      }
+    }
+
+    // Send motor control command
+    async function sendMotorCommand(command) {
+      if (deviceConnected) {
+        try {
+          const response = await fetch(`/${command}`);
+          if (response.ok) {
+            const data = await response.json();
+            motorStatus = data.motorStatus;
+            updateButtonAppearance();
+          }
+        } catch (error) {
+          console.error('Error sending command:', error);
+        }
+      } else {
+        alert('ESP32 is not connected. Please check your connection.');
+      }
+    }
+
+    // Toggle button click handler
+    toggleButton.addEventListener('click', function() {
+      const command = motorStatus ? 'off' : 'on';
+      sendMotorCommand(command);
+    });
+
+    // Schedule button click handler
+    scheduleButton.addEventListener('click', function() {
+      const startTime = startTimeInput.value;
+      const duration = parseInt(durationInput.value, 10);
+      
+      if (!startTime || isNaN(duration) || duration <= 0) {
+        alert('Please enter valid time and duration');
+        return;
+      }
+      
+      // Add new schedule
+      const id = Date.now(); // Use timestamp as unique ID
+      const newSchedule = { id, startTime, duration };
+      schedules.push(newSchedule);
+      
+      // Save to localStorage
+      localStorage.setItem('motorSchedules', JSON.stringify(schedules));
+      
+      // Update display
+      updateScheduleDisplay();
+      
+      // Send to ESP32
+      sendScheduleToESP32(newSchedule);
+      
+      // Clear inputs
+      startTimeInput.value = '';
+      durationInput.value = '';
+    });
+
+    // Send schedule to ESP32
+    async function sendScheduleToESP32(schedule) {
+      if (deviceConnected) {
+        try {
+          const response = await fetch('/schedule', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/x-www-form-urlencoded',
+            },
+            body: `id=${schedule.id}&startTime=${encodeURIComponent(schedule.startTime)}&duration=${schedule.duration}`
+          });
+          
+          if (!response.ok) {
+            throw new Error('Failed to send schedule');
+          }
+        } catch (error) {
+          console.error('Error sending schedule:', error);
+        }
+      }
+    }
+
+    // Delete schedule
+    function deleteSchedule(id) {
+      schedules = schedules.filter(schedule => schedule.id !== id);
+      localStorage.setItem('motorSchedules', JSON.stringify(schedules));
+      updateScheduleDisplay();
+      
+      // Send delete request to ESP32
+      if (deviceConnected) {
+        fetch(`/delete-schedule?id=${id}`).catch(error => {
+          console.error('Error deleting schedule:', error);
+        });
+      }
+    }
+
+    // Update schedule display
+    function updateScheduleDisplay() {
+      scheduleItemsDiv.innerHTML = '';
+      
+      if (schedules.length === 0) {
+        scheduleItemsDiv.innerHTML = '<p>No schedules set</p>';
+        return;
+      }
+      
+      schedules.forEach(schedule => {
+        const endTimeMinutes = parseInt(schedule.startTime.split(':')[0]) * 60 + 
+                               parseInt(schedule.startTime.split(':')[1]) + 
+                               parseInt(schedule.duration);
+        const endHours = Math.floor(endTimeMinutes / 60) % 24;
+        const endMinutes = endTimeMinutes % 60;
+        
+        const endTimeStr = `${endHours.toString().padStart(2, '0')}:${endMinutes.toString().padStart(2, '0')}`;
+        
+        const scheduleItem = document.createElement('div');
+        scheduleItem.className = 'schedule-item';
+        scheduleItem.innerHTML = `
+          <div>
+            <strong>Start:</strong> ${schedule.startTime}, 
+            <strong>End:</strong> ${endTimeStr}, 
+            <strong>Duration:</strong> ${schedule.duration} min
+          </div>
+          <button class="delete-btn" data-id="${schedule.id}">Delete</button>
+        `;
+        
+        scheduleItemsDiv.appendChild(scheduleItem);
+      });
+      
+      // Attach delete event listeners
+      document.querySelectorAll('.delete-btn').forEach(button => {
+        button.addEventListener('click', function() {
+          const id = parseInt(this.getAttribute('data-id'), 10);
+          deleteSchedule(id);
+        });
+      });
+    }
+
+    // Check schedules and run if time matches
+    function checkSchedulesAndConnection() {
+      checkConnection();
+      checkMotorStatus();
+      
+      if (!deviceConnected) return;
+      
+      const now = new Date();
+      const currentTimeStr = `${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}`;
+      
+      // Only for display/debugging - actual schedule execution happens on ESP32
+      console.log(`Current time: ${currentTimeStr}`);
+    }
+  </script>
+</body>
+</html>
